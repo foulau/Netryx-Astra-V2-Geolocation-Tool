@@ -43,7 +43,7 @@ import hashlib
 import zipfile
 import tempfile
 import shutil
-import time
+import time, uuid
 import numpy as np
 from pathlib import Path
 
@@ -158,6 +158,7 @@ def create_bundle(index_dir, output_path, name, description, center_lat, center_
     # Build manifest
     manifest = {
         "format_version": BUNDLE_FORMAT_VERSION,
+        "index_id": str(uuid.uuid4()),
         "name": name,
         "description": description,
         "creator": creator,
@@ -169,8 +170,12 @@ def create_bundle(index_dir, output_path, name, description, center_lat, center_
         "num_panoids": int(num_panoids),
         "descriptor_dim": int(desc_dim),
         "raw_descriptor_dim": 8448,
-        "descriptor_model": "MegaLoc",
-        "pca_components": int(desc_dim),
+        "descriptor_model": "MegaLoc" if os.path.exists(
+            os.path.join(index_dir, "megaloc_descriptors.npy")
+        ) else "MixVPR",
+        "pca_components": int(desc_dim) if os.path.exists(
+            os.path.join(index_dir, "megaloc_pca.pkl")
+        ) else None,
         "heading_step_deg": int(heading_step),
         "crop_fov_deg": int(crop_fov),
         "crop_size_px": int(crop_size),
@@ -243,19 +248,31 @@ def extract_bundle(bundle_path, index_dir):
     Returns:
         manifest dict
     """
-    os.makedirs(index_dir, exist_ok=True)
 
     with zipfile.ZipFile(bundle_path, 'r') as zf:
         # Read manifest first
         manifest = json.loads(zf.read("manifest.json"))
+        # Use manifest UUID if available, otherwise create one for old bundles
+        index_id = manifest.get("index_id", str(uuid.uuid4()))
+
+        index_dir = os.path.join(index_dir, "indexes", index_id)
+        os.makedirs(index_dir, exist_ok=True)
+
+        manifest["index_id"] = index_id
         print(f"[HUB] Extracting: {manifest['name']}")
         print(f"[HUB]   Coverage: ({manifest['center_lat']:.4f}, {manifest['center_lon']:.4f}) "
               f"r={manifest['radius_km']}km")
         print(f"[HUB]   Entries: {manifest['num_entries']}, dim: {manifest['descriptor_dim']}")
 
         # Extract with correct filenames for Netryx
+        # Choose descriptor filename based on encoder
+        if manifest.get("descriptor_model", "").lower() == "mixvpr":
+            descriptor_name = "mixvpr_descriptors.npy"
+        else:
+            descriptor_name = "megaloc_descriptors.npy"
+
         file_mapping = {
-            "descriptors.npy": "megaloc_descriptors.npy",
+            "descriptors.npy": descriptor_name,
             "metadata.npz": "metadata.npz",
             "pca_model.pkl": "megaloc_pca.pkl",
             "index_info.txt": "index_info.txt",

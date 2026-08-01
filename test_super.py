@@ -18,6 +18,7 @@ import threading
 import queue
 import time
 import json
+import uuid
 import random
 import glob
 import cv2
@@ -36,6 +37,8 @@ from megaloc_utils import (
     MEGALOC_RAW_DIM, MEGALOC_PCA_DIM
 )
 import gc
+import torch._dynamo
+torch._dynamo.config.suppress_errors = True
 
 #PCA matching dimensions
 INDEX_TARGET_DIM = 1024
@@ -92,9 +95,10 @@ if os.path.exists(_potential_dir):
 else:
     DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "netryx_data")
 
+COMPACT_INDEX_DIR = os.path.join(DATA_DIR, "index")
 MEGALOC_PARTS_DIR = os.path.join(DATA_DIR, "megaloc_parts")
 EMB_CSV = os.path.join(DATA_DIR, "embeddings_index.csv")
-COMPACT_INDEX_DIR = os.path.join(DATA_DIR, "index")
+INDEXES_DIR = os.path.join(DATA_DIR, "indexes")
 COMPACT_DESCS_PATH = os.path.join(COMPACT_INDEX_DIR, "megaloc_descriptors.npy")
 COMPACT_META_PATH = os.path.join(COMPACT_INDEX_DIR, "metadata.npz")
 COMPACT_INFO_PATH = os.path.join(COMPACT_INDEX_DIR, "index_info.txt")
@@ -107,6 +111,8 @@ COMPACT_INFO_PATH = os.path.join(COMPACT_INDEX_DIR, "index_info.txt")
 ACTIVE_ENCODER = "megaloc"
 ENCODER_USES_PCA = True          # MegaLoc: 8448-dim -> PCA. MixVPR: already compact.
 _BATCH_ENCODE = batch_extract_megaloc
+
+os.makedirs(INDEXES_DIR, exist_ok=True)
 
 def set_encoder(name):
     """Switch the active retrieval encoder and repoint all index paths to it."""
@@ -188,7 +194,74 @@ def tensor_to_pil(t):
         t = t.squeeze(2)
     return Image.fromarray(t)
 
+def scan_indexes():
+    indexes = []
 
+    indexes_dir = os.path.join(DATA_DIR, "indexes")
+
+    if not os.path.exists(indexes_dir):
+        return indexes
+
+    for index_id in os.listdir(indexes_dir):
+        index_path = os.path.join(indexes_dir, index_id)
+        manifest_path = os.path.join(index_path, "manifest.json")
+
+        if not os.path.isfile(manifest_path):
+            continue
+
+        try:
+            with open(manifest_path, "r") as f:
+                manifest = json.load(f)
+
+            manifest["path"] = index_path
+            manifest["index_id"] = index_id
+
+            indexes.append(manifest)
+
+        except Exception as e:
+            print(f"[INDEX] Failed loading {index_id}: {e}")
+
+    return indexes
+
+def load_index(index_id):
+    global COMPACT_INDEX_DIR
+    global COMPACT_DESCS_PATH
+    global COMPACT_META_PATH
+    global COMPACT_INFO_PATH
+    global _compact_cache
+
+    index_path = os.path.join(INDEXES_DIR, index_id)
+
+    if not os.path.exists(index_path):
+        raise FileNotFoundError(f"Index not found: {index_id}")
+
+    COMPACT_INDEX_DIR = index_path
+
+    # Read manifest to determine descriptor name
+    manifest_path = os.path.join(index_path, "manifest.json")
+
+    with open(manifest_path, "r") as f:
+        manifest = json.load(f)
+
+    encoder = manifest.get("descriptor_model", "MegaLoc").lower()
+
+    if encoder == "mixvpr":
+        desc_name = "mixvpr_descriptors.npy"
+    else:
+        desc_name = "megaloc_descriptors.npy"
+
+    COMPACT_DESCS_PATH = os.path.join(index_path, desc_name)
+    COMPACT_META_PATH = os.path.join(index_path, "metadata.npz")
+    COMPACT_INFO_PATH = os.path.join(index_path, "index_info.txt")
+
+    _compact_cache = None
+
+    print(
+        f"[INDEX] Loaded {manifest.get('name', index_id)} "
+        f"({encoder})"
+    )
+
+    return manifest
 
 def draw_matches(img1, img2, kp1, kp2, matches=None, color=(0, 255, 0)):
     w1, h1 = img1.size
@@ -495,9 +568,17 @@ def build_compact_index():
     
     Auto-applies PCA if descriptors are high-dimensional (e.g., 8448 from MegaLoc).
     """
+    global COMPACT_INDEX_DIR
+    global COMPACT_DESCS_PATH
+    global COMPACT_META_PATH
+    global COMPACT_INFO_PATH
     global _compact_cache
     import glob
     os.makedirs(COMPACT_INDEX_DIR, exist_ok=True)
+    
+    index_id = str(uuid.uuid4())
+    index_dir = os.path.join(INDEXES_DIR, index_id)
+    os.makedirs(index_dir, exist_ok=True)
 
     megaloc_pattern = os.path.join(MEGALOC_PARTS_DIR, "megaloc_part_*.npz")
     part_files = sorted(glob.glob(megaloc_pattern))
@@ -530,7 +611,7 @@ def build_compact_index():
         
         # Fit PCA on a subsample (avoids 63GB RAM spike for 2M×8448)
         MAX_PCA_SAMPLES = 100_000
-        pca_path = os.path.join(COMPACT_INDEX_DIR, "megaloc_pca.pkl")
+        pca_path = os.path.join(index_dir, "megaloc_pca.pkl")
         
         # Collect subsample for PCA fitting
         print(f"[INDEX] Collecting subsample for PCA fitting (max {MAX_PCA_SAMPLES})...")
@@ -706,7 +787,10 @@ def build_compact_index():
         norms[norms == 0] = 1
         chunk /= norms
 
-    print("[INDEX] Saving descriptors...")
+    COMPACT_INDEX_DIR = index_dir
+    COMPACT_DESCS_PATH = os.path.join(COMPACT_INDEX_DIR, "megaloc_descriptors.npy")
+    COMPACT_META_PATH = os.path.join(COMPACT_INDEX_DIR, "metadata.npz")
+    COMPACT_INFO_PATH = os.path.join(COMPACT_INDEX_DIR, "index_info.txt")
     np.save(COMPACT_DESCS_PATH, descs_valid)
     del descs_valid, all_descs
 
@@ -1854,7 +1938,7 @@ class StreetViewMatcherGUI:
             # Load PCA only for encoders that use it (MegaLoc). MixVPR descriptors
             # are already compact and searched directly.
             if ENCODER_USES_PCA:
-                pca_path = os.path.join(COMPACT_INDEX_DIR, "megaloc_pca.pkl")
+                pca_path = os.path.join(index_dir, "megaloc_pca.pkl")
                 if os.path.exists(pca_path):
                     from megaloc_utils import load_pca, _pca_model
                     if _pca_model is None:
@@ -2560,7 +2644,7 @@ class StreetViewMatcherGUI:
                 try:
                     token = self.hf_token_var.get().strip()
                     if not token:
-                        self.master.after(0, lambda: messagebox.showerror("Hugging Face Help", 
+                        self.master.after(0, lambda: tk.messagebox.showerror("Hugging Face Help", 
                             "Please connect Hugging Face to upload.\n\n"
                             "1. Click 'Get Hugging Face Token'\n"
                             "2. Generate a WRITE token\n"
@@ -2651,7 +2735,7 @@ class StreetViewMatcherGUI:
                 _compact_cache = None
 
                 # Load PCA if present
-                pca_path = os.path.join(COMPACT_INDEX_DIR, "megaloc_pca.pkl")
+                pca_path = os.path.join(index_dir, "megaloc_pca.pkl")
                 if os.path.exists(pca_path):
                     try:
                         from megaloc_utils import load_pca
@@ -2788,6 +2872,8 @@ if __name__ == "__main__":
     # Ensure data dirs exist
     for d in [DATA_DIR, MEGALOC_PARTS_DIR, COMPACT_INDEX_DIR]:
         os.makedirs(d, exist_ok=True)
+        
+    print(scan_indexes())
 
     root = tk.Tk()
     app = StreetViewMatcherGUI(root)
