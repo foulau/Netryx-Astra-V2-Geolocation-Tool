@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Netryx Astra V2</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
+</head>
+
+<body>
+
+<header>
+    <div class="logo">
+        Netryx Astra
+        <b>V2</b>
+    </div>
+    <div class="status">
+        <div class="status-dot" id="apiStatusDot"></div>
+        <span id="apiStatusText">API Online</span>
+    </div>
+</header>
+
+<div class="layout">
+
+    <aside class="sidebar">
+
+        <h3>Image</h3>
+        <input type="file" id="imageInput" accept="image/jpeg,image/png" style="display:none">
+        <div class="upload-box" id="uploadBox">
+            <img id="uploadBoxPreview" style="display:none;">
+            <span id="uploadBoxText">Upload Query Image</span>
+        </div>
+
+        <h3>Mode</h3>
+        <div class="selector-group">
+            <div class="selector active" data-group="mode" data-value="search">
+                <div class="selector-dot active"></div>
+                Search
+                <span class="info-icon">?<span class="tooltip-text">Find where a photo was taken by matching it against an already-built index. Use this if you just want to locate a picture.</span></span>
+            </div>
+            <div class="selector" data-group="mode" data-value="create">
+                <div class="selector-dot"></div>
+                Create Index
+                <span class="info-icon">?<span class="tooltip-text">Build a new searchable index for an area by downloading and encoding its Street View coverage. Only needed if nobody has indexed that area yet.</span></span>
+            </div>
+        </div>
+
+        <h3>Encoder</h3>
+        <div class="selector-group">
+            <div class="selector active" data-group="encoder" data-value="megaloc">
+                <div class="selector-dot active"></div>
+                MegaLoc
+                <span class="info-icon">?<span class="tooltip-text">Highest accuracy and recall — best for hard photos. About 4x slower to index and produces much larger index files than MixVPR.</span></span>
+            </div>
+            <div class="selector" data-group="encoder" data-value="mixvpr">
+                <div class="selector-dot"></div>
+                MixVPR
+                <span class="info-icon">?<span class="tooltip-text">3-4x faster to index with much smaller index files, but slightly lower recall on difficult shots. Great for quickly indexing a new area.</span></span>
+            </div>
+        </div>
+
+        <h3>Index</h3>
+        <select id="indexSelect">
+            <option value="">No index selected</option>
+        </select>
+        <div class="index-actions">
+            <input type="file" id="importInput" accept=".netryx" style="display:none">
+            <button id="importBtn" class="icon-btn" title="Import index">⬆ Import</button>
+            <button id="exportBtn" class="icon-btn" title="Export selected index">⬇ Export</button>
+            <button id="deleteBtn" class="icon-btn danger-outline" title="Delete selected index">🗑 Delete</button>
+        </div>
+
+        <h3>Parameters</h3>
+
+        <label>Latitude
+            <span class="info-icon">?<span class="tooltip-text">Center latitude of the area to search or index. In Search mode this must overlap the loaded index's coverage.</span></span>
+        </label>
+        <input id="lat" value="40.7132">
+
+        <label>Longitude
+            <span class="info-icon">?<span class="tooltip-text">Center longitude of the area to search or index. Paired with Latitude to define the circle's center point.</span></span>
+        </label>
+        <input id="lon" value="-74.0025">
+
+        <label>Search Radius (km)
+            <span class="info-icon">?<span class="tooltip-text">How far from the center point to search or index, in kilometers. Drag the yellow handle on the map to adjust visually.</span></span>
+        </label>
+        <input id="radius" value="10">
+
+        <label>Grid Resolution (m)
+            <span class="info-icon">?<span class="tooltip-text">Distance in meters between adjacent scan points when building an index. Lower = denser, more thorough coverage, but much slower to build. 300m is a good default; values below ~43m are floored since Street View's own search radius already covers that tightly.</span></span>
+        </label>
+        <input id="resolution" value="300">
+
+        <label>Match Threshold
+            <span class="info-icon">?<span class="tooltip-text">Minimum MASt3R inlier score for a result to count as a real match. Higher = fewer false positives but may miss subtle matches; lower can help in difficult lighting or weather.</span></span>
+        </label>
+        <input id="threshold" value="50">
+
+        <button id="runBtn">▶ Run Search</button>
+
+        <div id="statusBar">System ready</div>
+        <div id="progressTrack"><div id="progressFill"></div></div>
+
+    </aside>
+
+    <main>
+        <div id="map"></div>
+        <div id="mapOverlay">
+            <h4>Results</h4>
+            <div id="resultsList"><span class="muted">No results yet</span></div>
+        </div>
+    </main>
+
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="/static/app.js"></script>
+
+</body>
+</html>

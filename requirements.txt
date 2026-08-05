@@ -10,5 +10,5 @@ safetensors
 einops
 timm
 matplotlib
-# MASt3R and Dust3r should be cloned separately alongside this repo
-# git clone https://github.com/naver/mast3r.git
+fastapi
+uvicorn
